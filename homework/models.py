@@ -9,6 +9,12 @@ INPUT_STD = [0.2064, 0.1944, 0.2252]
 
 HOMEWORK_DIR = Path(__file__).resolve().parent
 
+model_path = HOMEWORK_DIR / "classifier.th"
+if model_path.exists():
+    print("Classifier model file exists.")
+else:
+    print("Classifier model file is missing. Please ensure it was saved.")
+    
 class Classifier(nn.Module):
     def __init__(self, in_channels: int = 3, num_classes: int = 6):
         super().__init__()
