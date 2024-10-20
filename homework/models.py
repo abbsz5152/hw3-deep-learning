@@ -7,6 +7,7 @@ HOMEWORK_DIR = Path(__file__).resolve().parent
 INPUT_MEAN = [0.2788, 0.2657, 0.2629]
 INPUT_STD = [0.2064, 0.1944, 0.2252]
 
+HOMEWORK_DIR = Path(__file__).resolve().parent
 
 class Classifier(nn.Module):
     def __init__(self, in_channels: int = 3, num_classes: int = 6):
@@ -165,10 +166,13 @@ def load_model(
 
     if with_weights:
         model_path = HOMEWORK_DIR / f"{model_name}.th"
+
         assert model_path.exists(), f"{model_path.name} not found"
 
         try:
             m.load_state_dict(torch.load(model_path, map_location="cpu"))
+            print(f"Loaded model weights from {model_path}")
+
         except RuntimeError as e:
             raise AssertionError(
                 f"Failed to load {model_path.name}, make sure the default model arguments are set correctly"
