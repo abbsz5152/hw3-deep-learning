@@ -6,11 +6,11 @@ from .models import Classifier, save_model
 from pathlib import Path
 
 # Set the dataset path for Colab
-train_path = "/content/drive/MyDrive/homework3_original/classification_data/train"
-val_path = "/content/drive/MyDrive/homework3_original/classification_data/val"
+train_path = "/content/classification_data/train"
+val_path = "/content/classification_data/val"
 
 # Hyperparameters
-epochs = 45
+epochs = 50
 batch_size = 64
 learning_rate = 1e-3
 
