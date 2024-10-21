@@ -7,14 +7,12 @@ HOMEWORK_DIR = Path(__file__).resolve().parent
 INPUT_MEAN = [0.2788, 0.2657, 0.2629]
 INPUT_STD = [0.2064, 0.1944, 0.2252]
 
-HOMEWORK_DIR = Path(__file__).resolve().parent
-
 model_path = HOMEWORK_DIR / "classifier.th"
 if model_path.exists():
     print("Classifier model file exists.")
 else:
     print("Classifier model file is missing. Please ensure it was saved.")
-    
+
 class Classifier(nn.Module):
     def __init__(self, in_channels: int = 3, num_classes: int = 6):
         super().__init__()
@@ -45,9 +43,7 @@ class Classifier(nn.Module):
             nn.Linear(128, num_classes)  # Output: (B, num_classes)
         )
 
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        
         # Normalize the input
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
@@ -62,20 +58,11 @@ class Classifier(nn.Module):
     def predict(self, x: torch.Tensor) -> torch.Tensor:
         """
         Used for inference, returns class labels
-        This is what the AccuracyMetric uses as input (this is what the grader will use!).
-        You should not have to modify this function.
-
-        Args:
-            x (torch.FloatTensor): image with shape (b, 3, h, w) and vals in [0, 1]
-
-        Returns:
-            pred (torch.LongTensor): class labels {0, 1, ..., 5} with shape (b, h, w)
         """
         return self(x).argmax(dim=1)
 
-
 class Detector(torch.nn.Module):
-      def __init__(self, in_channels: int = 3, num_classes: int = 3):
+    def __init__(self, in_channels: int = 3, num_classes: int = 3):
         """
         Enhanced model for segmentation and depth estimation.
 
@@ -104,19 +91,22 @@ class Detector(torch.nn.Module):
         # Decoder for segmentation (upsampling)
         self.upconv1 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)  # Output: (B, 128, 24, 32)
         self.upconv2 = nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)  # Output: (B, 64, 48, 64)
-        self.upconv3 = nn.ConvTranspose2d(64, num_classes, kernel_size=3, stride=2, padding=1, output_padding=1)  # Output: (B, 3, 96, 128)
+        self.upconv3 = nn.ConvTranspose2d(64, num_classes, kernel_size=3, stride=2, padding=1, output_padding=1)  # Output: (B, num_classes, 96, 128)
 
         # Depth estimation head
         self.depth_head = nn.Sequential(
             nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Output: (B, 128, 12, 16)
             nn.ReLU(),
-            nn.Conv2d(128, 1, kernel_size=1)  # Output: (B, 1, 12, 16)
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Output: (B, 64, 12, 16)
+            nn.ReLU(),
+            nn.Conv2d(64, 1, kernel_size=1),  # Output: (B, 1, 12, 16)
+            nn.Sigmoid()  # Ensures depth values are in the range [0, 1]
         )
 
         # Upsampling depth to match input size
         self.depth_upsample = nn.ConvTranspose2d(1, 1, kernel_size=3, stride=8, padding=1, output_padding=(7, 7))  # Output: (B, 1, 96, 128)
 
-      def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Normalize the input
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
@@ -134,18 +124,9 @@ class Detector(torch.nn.Module):
 
         return seg, depth
 
-      def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Used for inference, takes an image and returns class labels and normalized depth.
-        This is what the metrics use as input (this is what the grader will use!).
-
-        Args:
-            x (torch.FloatTensor): image with shape (b, 3, h, w) and vals in [0, 1]
-
-        Returns:
-            tuple of (torch.LongTensor, torch.FloatTensor):
-                - pred: class labels {0, 1, 2} with shape (b, h, w)
-                - depth: normalized depth [0, 1] with shape (b, h, w)
         """
         logits, raw_depth = self(x)
         pred = logits.argmax(dim=1)
@@ -153,18 +134,12 @@ class Detector(torch.nn.Module):
 
         return pred, depth
 
-
 MODEL_FACTORY = {
     "classifier": Classifier,
     "detector": Detector,
 }
 
-
-def load_model(
-    model_name: str,
-    with_weights: bool = False,
-    **model_kwargs,
-) -> torch.nn.Module:
+def load_model(model_name: str, with_weights: bool = False, **model_kwargs) -> torch.nn.Module:
     """
     Called by the grader to load a pre-trained model by name
     """
@@ -172,7 +147,6 @@ def load_model(
 
     if with_weights:
         model_path = HOMEWORK_DIR / f"{model_name}.th"
-
         assert model_path.exists(), f"{model_path.name} not found"
 
         try:
@@ -192,7 +166,6 @@ def load_model(
 
     return m
 
-
 def save_model(model: torch.nn.Module) -> str:
     """
     Use this function to save your model in train.py
@@ -211,7 +184,6 @@ def save_model(model: torch.nn.Module) -> str:
 
     return output_path
 
-
 def calculate_model_size_mb(model: torch.nn.Module) -> float:
     """
     Args:
@@ -222,13 +194,9 @@ def calculate_model_size_mb(model: torch.nn.Module) -> float:
     """
     return sum(p.numel() for p in model.parameters()) * 4 / 1024 / 1024
 
-
 def debug_model(batch_size: int = 1):
     """
     Test your model implementation
-
-    Feel free to add additional checks to this function -
-    this function is NOT used for grading
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sample_batch = torch.rand(batch_size, 3, 64, 64).to(device)
@@ -240,7 +208,6 @@ def debug_model(batch_size: int = 1):
 
     # should output logits (b, num_classes)
     print(f"Output shape: {output.shape}")
-
 
 if __name__ == "__main__":
     debug_model()

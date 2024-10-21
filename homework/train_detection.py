@@ -28,9 +28,12 @@ print("Initializing the model...")
 model = Detector(in_channels=3, num_classes=3).to(device)
 
 # Define the loss functions and optimizer
-segmentation_loss_fn = nn.CrossEntropyLoss()  # For segmentation logits
-depth_loss_fn = nn.L1Loss()  # For depth prediction (L1 Loss)
+class_weights = torch.tensor([0.2, 0.4, 0.4]).to(device)  # Adjust weights for segmentation
+segmentation_loss_fn = nn.CrossEntropyLoss(weight=class_weights)  # Weighted segmentation loss
+depth_loss_fn_l1 = nn.L1Loss()  # L1 loss for depth
+depth_loss_fn_mse = nn.MSELoss()  # MSE loss for depth to combine with L1
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
 def train_detection():
     print("Training started...")
@@ -56,11 +59,20 @@ def train_detection():
 
             # Compute the losses
             segmentation_loss = segmentation_loss_fn(segmentation_logits, segmentation_labels)
-            depth_loss = depth_loss_fn(depth_pred, depth_labels)
+
+            # Emphasize lane areas in depth loss calculation
+            lane_mask = (segmentation_labels > 0).float()  # Mask out non-background
+            weighted_depth_loss = torch.abs(depth_pred - depth_labels) * (1 + lane_mask * 2)  # Emphasize lane areas
+
+            # Combine L1 and MSE loss for depth estimation
+            depth_loss = depth_loss_fn_l1(depth_pred, depth_labels) + 0.5 * depth_loss_fn_mse(depth_pred, depth_labels)
 
             # Combine losses and backpropagate
             total_loss = segmentation_loss + depth_loss
             total_loss.backward()
+
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_val)
             optimizer.step()
 
             # Accumulate losses
@@ -102,7 +114,7 @@ def train_detection():
 
                 # Calculate validation losses for logging
                 val_seg_loss += segmentation_loss_fn(segmentation_logits, segmentation_labels).item()
-                val_depth_loss += depth_loss_fn(depth_pred, depth_labels).item()
+                val_depth_loss += depth_loss_fn_l1(depth_pred, depth_labels).item()
 
                 # Calculate IoU for the batch
                 batch_iou = iou_metric(predicted_segmentation.cpu(), segmentation_labels.cpu(), n_classes=3)
@@ -124,6 +136,9 @@ def train_detection():
             best_val_loss = avg_val_loss
             model_save_path = save_model(model)
             print(f"Model saved to {model_save_path} with validation loss {best_val_loss:.4f}")
+
+        # Step the scheduler
+        scheduler.step()
 
 def iou_metric(predicted, target, n_classes):
     intersection = torch.logical_and(predicted == target, target < n_classes).sum().float()
