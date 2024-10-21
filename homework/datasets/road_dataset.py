@@ -44,8 +44,7 @@ class RoadDataset(Dataset):
                 road_transforms.DepthLoader(self.episode_path),
                 road_transforms.TrackProcessor(self.track),
                 road_transforms.RandomHorizontalFlip(),  # Flips images randomly with a 50% chance
-                road_transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),  # Changes color properties
-                road_transforms.RandomCrop((90, 120)),  # Randomly crops the image
+                
             ]
         )
       else:

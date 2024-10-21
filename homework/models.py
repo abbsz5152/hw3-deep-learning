@@ -130,7 +130,7 @@ class Detector(torch.nn.Module):
 
         # Depth estimation path
         depth = self.depth_head(z)
-        depth = self.depth_upsample(depth)
+        depth = self.depth_upsample(depth).squeeze(1)
 
         return seg, depth
 
