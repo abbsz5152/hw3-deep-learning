@@ -28,29 +28,28 @@ class RoadDataset(Dataset):
         self.transform = self.get_transform(transform_pipeline)
 
     def get_transform(self, transform_pipeline: str):
-      if transform_pipeline == "default":
-        xform = road_transforms.Compose(
-            [
-                road_transforms.ImageLoader(self.episode_path),
-                road_transforms.DepthLoader(self.episode_path),
-                road_transforms.TrackProcessor(self.track),
-            ]
-        )
-      elif transform_pipeline == "aug":
-        # Augmentation transformations to improve model generalization
-        xform = road_transforms.Compose(
-            [
-                road_transforms.ImageLoader(self.episode_path),
-                road_transforms.DepthLoader(self.episode_path),
-                road_transforms.TrackProcessor(self.track),
-                road_transforms.RandomHorizontalFlip(),  # Flips images randomly with a 50% chance
-                
-            ]
-        )
-      else:
-        raise ValueError(f"Invalid transform {transform_pipeline} specified!")
+        if transform_pipeline == "default":
+            xform = road_transforms.Compose(
+                [
+                    road_transforms.ImageLoader(self.episode_path),
+                    road_transforms.DepthLoader(self.episode_path),
+                    road_transforms.TrackProcessor(self.track),
+                ]
+            )
+        elif transform_pipeline == "aug":
+            # Augmentation transformations to improve model generalization
+            xform = road_transforms.Compose(
+                [
+                    road_transforms.ImageLoader(self.episode_path),
+                    road_transforms.DepthLoader(self.episode_path),
+                    road_transforms.TrackProcessor(self.track),
+                    road_transforms.RandomHorizontalFlip(),  # Flips images randomly with a 50% chance
+                ]
+            )
+        else:
+            raise ValueError(f"Invalid transform {transform_pipeline} specified!")
 
-      return xform
+        return xform
 
     def __len__(self):
         return len(self.frames["loc"])

@@ -1,4 +1,4 @@
-import torch 
+import torch
 import torch.optim as optim
 import torch.nn as nn
 from .datasets.road_dataset import load_data
@@ -10,10 +10,11 @@ train_path = "/content/road_data/train"
 val_path = "/content/road_data/val"
 
 # Hyperparameters
-epochs = 50
+epochs = 35  # Increased number of epochs for more training time
 batch_size = 10
 learning_rate = 1e-3
-gradient_clip_val = 3.0
+gradient_clip_val = 5.0
+depth_loss_multiplier = 0.011  # Multiplying depth loss by constant factor
 
 # Setup device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -34,14 +35,12 @@ segmentation_loss_fn = nn.CrossEntropyLoss(weight=class_weights)  # Weighted seg
 # Custom depth loss function to put more emphasis on large errors
 def custom_depth_loss(pred, target):
     abs_diff = torch.abs(pred - target)
-    # Emphasize larger depth errors by squaring them, while keeping small errors linear
-    lane_mask = (target > 0).float()  # Emphasize lane regions
-    weighted_diff = abs_diff + 0.5 * abs_diff ** 2
-    emphasized_loss = weighted_diff * (1 + lane_mask * 2)  # Add more emphasis to lane areas
-    return torch.mean(emphasized_loss)
+    # Use log to put a very strong penalty on larger errors and add linear penalty
+    emphasized_loss = torch.mean(abs_diff + 0.8 * abs_diff ** 2 + torch.log1p(abs_diff))
+    return emphasized_loss
 
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.1)  # Slower learning rate decay for finer training adjustments
 
 def train_detection():
     print("Training started...")
@@ -50,11 +49,6 @@ def train_detection():
     best_val_loss = float('inf')
 
     for epoch in range(epochs):
-        # Adjust learning rate for depth head after certain epochs
-        if epoch > 15:
-            for g in optimizer.param_groups:
-                g['lr'] = learning_rate * 0.1
-
         # Training phase
         model.train()  # Set model to training mode
         total_seg_loss, total_depth_loss = 0.0, 0.0
@@ -75,7 +69,9 @@ def train_detection():
             depth_loss = custom_depth_loss(depth_pred, depth_labels)
 
             # Combine losses and backpropagate
-            total_loss = segmentation_loss + depth_loss
+            # Multiply depth loss by a constant factor to prioritize depth error
+            adjusted_depth_loss = depth_loss * depth_loss_multiplier
+            total_loss = segmentation_loss + adjusted_depth_loss
             total_loss.backward()
 
             # Gradient clipping
@@ -84,11 +80,11 @@ def train_detection():
 
             # Accumulate losses
             total_seg_loss += segmentation_loss.item()
-            total_depth_loss += depth_loss.item()
+            total_depth_loss += adjusted_depth_loss.item()
 
             if batch_idx % 10 == 0:
                 print(f"Epoch [{epoch+1}/{epochs}], Batch [{batch_idx}/{len(train_loader)}], "
-                      f"Segmentation Loss: {segmentation_loss.item():.4f}, Depth Loss: {depth_loss.item():.4f}")
+                      f"Segmentation Loss: {segmentation_loss.item():.4f}, Depth Loss: {adjusted_depth_loss.item():.4f}")
 
         # Print epoch loss
         avg_seg_loss = total_seg_loss / len(train_loader)
@@ -118,6 +114,11 @@ def train_detection():
                 # Calculate depth error (Mean Absolute Error)
                 depth_error = torch.abs(depth_pred - depth_labels).mean().item()
                 total_depth_error += depth_error
+
+                # Stop training depth if the error is below the threshold
+                if depth_error < 0.015:
+                    print(f"Depth error below threshold at Epoch [{epoch+1}], stopping depth training.")
+                    break
 
                 # Calculate validation losses for logging
                 val_seg_loss += segmentation_loss_fn(segmentation_logits, segmentation_labels).item()
