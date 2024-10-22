@@ -61,7 +61,8 @@ class Classifier(nn.Module):
         """
         return self(x).argmax(dim=1)
 
-class Detector(torch.nn.Module):
+
+class Detector(nn.Module):
     def __init__(self, in_channels: int = 3, num_classes: int = 3):
         """
         Enhanced model for segmentation and depth estimation.
@@ -76,69 +77,83 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # Encoder (Downsampling path)
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, 64, kernel_size=3, stride=2, padding=1),  # Output: (B, 64, 48, 64)
+        self.encoder1 = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=3, stride=2, padding=1),  # Output: (B, 64, H/2, W/2)
             nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),  # Output: (B, 128, 24, 32)
+            nn.ReLU()
+        )
+        self.encoder2 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),  # Output: (B, 128, H/4, W/4)
             nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),  # Output: (B, 256, 12, 16)
+            nn.ReLU()
+        )
+        self.encoder3 = nn.Sequential(
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),  # Output: (B, 256, H/8, W/8)
             nn.BatchNorm2d(256),
             nn.ReLU()
         )
 
-        # Decoder for segmentation (upsampling)
-        self.upconv1 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)  # Output: (B, 128, 24, 32)
-        self.upconv2 = nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)  # Output: (B, 64, 48, 64)
-        self.upconv3 = nn.ConvTranspose2d(64, num_classes, kernel_size=3, stride=2, padding=1, output_padding=1)  # Output: (B, num_classes, 96, 128)
+        # Decoder for segmentation (upsampling with skip connections)
+        self.upconv1 = nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1)  # Output: (B, 128, H/4, W/4)
+        self.upconv2 = nn.ConvTranspose2d(256, 64, kernel_size=3, stride=2, padding=1, output_padding=1)  # Output: (B, 64, H/2, W/2)
+        self.upconv3 = nn.ConvTranspose2d(128, num_classes, kernel_size=3, stride=2, padding=1, output_padding=1)  # Output: (B, num_classes, H, W)
 
-        # Depth estimation head
-        self.depth_head = nn.Sequential(
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Output: (B, 128, 12, 16)
+        # Depth estimation head (more layers for better depth estimation)
+        self.depth_head1 = nn.Sequential(
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Output: (B, 128, H/8, W/8)
             nn.ReLU(),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Output: (B, 64, 12, 16)
+        )
+        self.depth_head2 = nn.Sequential(
+            nn.Conv2d(256, 64, kernel_size=3, padding=1),  # Adding skip connection from encoder2
             nn.ReLU(),
-            nn.Conv2d(64, 1, kernel_size=1),  # Output: (B, 1, 12, 16)
-            nn.Sigmoid()  # Ensures depth values are in the range [0, 1]
+            nn.Conv2d(64, 1, kernel_size=1),  # Output: (B, 1, H/8, W/8)
+            nn.Sigmoid()  # Normalize depth output to (0, 1)
         )
 
-        # Upsampling depth to match input size
-        self.depth_upsample = nn.ConvTranspose2d(1, 1, kernel_size=3, stride=8, padding=1, output_padding=(7, 7))  # Output: (B, 1, 96, 128)
+        # Upsampling depth to match input size using bilinear upsampling for smoother results
+        self.depth_upsample = nn.Sequential(
+            nn.Upsample(scale_factor=8, mode='bilinear', align_corners=True),  # Upsample to original input size
+        )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Normalize the input
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # Downsampling path
-        z = self.encoder(z)
+        z1 = self.encoder1(z)  # Output: (B, 64, H/2, W/2)
+        z2 = self.encoder2(z1)  # Output: (B, 128, H/4, W/4)
+        z3 = self.encoder3(z2)  # Output: (B, 256, H/8, W/8)
 
-        # Segmentation path (upsampling)
-        seg = self.upconv1(z)
-        seg = self.upconv2(seg)
-        seg = self.upconv3(seg)
+        # Segmentation path (upsampling with skip connections)
+        seg = self.upconv1(z3)  # (B, 128, H/4, W/4)
+        seg = torch.cat([seg, z2], dim=1)  # Skip connection from encoder2 (resulting in 128 + 128 = 256 channels)
+        seg = self.upconv2(seg)  # (B, 64, H/2, W/2)
+        seg = torch.cat([seg, z1], dim=1)  # Skip connection from encoder1 (resulting in 64 + 64 = 128 channels)
+        seg = self.upconv3(seg)  # (B, num_classes, H, W)
 
-        # Depth estimation path
-        depth = self.depth_head(z)
-        depth = self.depth_upsample(depth).squeeze(1)
+        # Depth estimation path with skip connections
+        depth = self.depth_head1(z3)  # (B, 128, H/8, W/8)
+        
+        # Align z2 size to match depth size before concatenation
+        z2_upsampled = nn.functional.interpolate(z2, size=depth.shape[2:], mode='bilinear', align_corners=True)
+        depth = torch.cat([depth, z2_upsampled], dim=1)  # Skip connection from encoder2 (resulting in 128 + 128 = 256 channels)
+
+        depth = self.depth_head2(depth)  # Further refine depth (output: (B, 1, H/8, W/8))
+        depth = self.depth_upsample(depth).squeeze(1)  # (B, H, W)
 
         return seg, depth
 
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Used for inference, takes an image and returns class labels and normalized depth.
-        """
         logits, raw_depth = self(x)
-        pred = logits.argmax(dim=1)
-        depth = raw_depth  # Post-processing could be added here if needed
+        pred = logits.argmax(dim=1)  # Get segmentation predictions
+        depth = raw_depth
 
         return pred, depth
-
+        
 MODEL_FACTORY = {
     "classifier": Classifier,
     "detector": Detector,
 }
-
 def load_model(model_name: str, with_weights: bool = False, **model_kwargs) -> torch.nn.Module:
     """
     Called by the grader to load a pre-trained model by name

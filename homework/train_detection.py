@@ -10,10 +10,10 @@ train_path = "/content/road_data/train"
 val_path = "/content/road_data/val"
 
 # Hyperparameters
-epochs = 25
+epochs = 50
 batch_size = 10
 learning_rate = 1e-3
-gradient_clip_val = 5.0
+gradient_clip_val = 3.0
 
 # Setup device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -30,8 +30,16 @@ model = Detector(in_channels=3, num_classes=3).to(device)
 # Define the loss functions and optimizer
 class_weights = torch.tensor([0.2, 0.4, 0.4]).to(device)  # Adjust weights for segmentation
 segmentation_loss_fn = nn.CrossEntropyLoss(weight=class_weights)  # Weighted segmentation loss
-depth_loss_fn_l1 = nn.L1Loss()  # L1 loss for depth
-depth_loss_fn_mse = nn.MSELoss()  # MSE loss for depth to combine with L1
+
+# Custom depth loss function to put more emphasis on large errors
+def custom_depth_loss(pred, target):
+    abs_diff = torch.abs(pred - target)
+    # Emphasize larger depth errors by squaring them, while keeping small errors linear
+    lane_mask = (target > 0).float()  # Emphasize lane regions
+    weighted_diff = abs_diff + 0.5 * abs_diff ** 2
+    emphasized_loss = weighted_diff * (1 + lane_mask * 2)  # Add more emphasis to lane areas
+    return torch.mean(emphasized_loss)
+
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
@@ -42,6 +50,11 @@ def train_detection():
     best_val_loss = float('inf')
 
     for epoch in range(epochs):
+        # Adjust learning rate for depth head after certain epochs
+        if epoch > 15:
+            for g in optimizer.param_groups:
+                g['lr'] = learning_rate * 0.1
+
         # Training phase
         model.train()  # Set model to training mode
         total_seg_loss, total_depth_loss = 0.0, 0.0
@@ -59,13 +72,7 @@ def train_detection():
 
             # Compute the losses
             segmentation_loss = segmentation_loss_fn(segmentation_logits, segmentation_labels)
-
-            # Emphasize lane areas in depth loss calculation
-            lane_mask = (segmentation_labels > 0).float()  # Mask out non-background
-            weighted_depth_loss = torch.abs(depth_pred - depth_labels) * (1 + lane_mask * 2)  # Emphasize lane areas
-
-            # Combine L1 and MSE loss for depth estimation
-            depth_loss = depth_loss_fn_l1(depth_pred, depth_labels) + 0.5 * depth_loss_fn_mse(depth_pred, depth_labels)
+            depth_loss = custom_depth_loss(depth_pred, depth_labels)
 
             # Combine losses and backpropagate
             total_loss = segmentation_loss + depth_loss
@@ -114,7 +121,7 @@ def train_detection():
 
                 # Calculate validation losses for logging
                 val_seg_loss += segmentation_loss_fn(segmentation_logits, segmentation_labels).item()
-                val_depth_loss += depth_loss_fn_l1(depth_pred, depth_labels).item()
+                val_depth_loss += custom_depth_loss(depth_pred, depth_labels).item()
 
                 # Calculate IoU for the batch
                 batch_iou = iou_metric(predicted_segmentation.cpu(), segmentation_labels.cpu(), n_classes=3)
